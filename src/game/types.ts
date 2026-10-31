@@ -185,6 +185,7 @@ export interface DamageNumber {
 export interface GroundItem {
   pos: Vec2; radius: number; kind: string; name: string;
   labelColor: string; itemColor: string; life: number; dead: boolean;
+  gemDefId?: string;
 }
 
 export interface PickupLabel {

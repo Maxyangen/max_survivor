@@ -16,6 +16,7 @@ const ISO_H = 0.5;  // isometric vertical scale (2:1 ratio)
 const BLOCK_HEIGHT = 20; // visual height of 3D blocks in screen pixels
 const MAX_ENEMIES = 140;
 const MOVE_SPEED_CAP = 400;
+const MAX_GEM_COPIES = 3;
 
 export class Game {
   canvas: HTMLCanvasElement;
@@ -202,6 +203,27 @@ export class Game {
     return this.ownedGems.find((gem) => gem.defId === defId);
   }
 
+  /** Count owned support-gem copies (excluding class active skills). */
+  countGemCopies(defId: string): number {
+    return this.ownedGems.filter((g) => g.defId === defId && !g.defId.startsWith('active-')).length;
+  }
+
+  /** True when player owns MAX_GEM_COPIES and all copies are at maxLevel. */
+  isGemMastered(defId: string): boolean {
+    const copies = this.ownedGems.filter((g) => g.defId === defId && !g.defId.startsWith('active-'));
+    if (copies.length < MAX_GEM_COPIES) return false;
+    const maxLv = GEM_DEFS[defId]?.maxLevel ?? 3;
+    return copies.every((g) => g.level >= maxLv);
+  }
+
+  /** True when at copy cap but at least one copy is below max level. */
+  isGemSaturated(defId: string): boolean {
+    const copies = this.ownedGems.filter((g) => g.defId === defId && !g.defId.startsWith('active-'));
+    if (copies.length < MAX_GEM_COPIES) return false;
+    const maxLv = GEM_DEFS[defId]?.maxLevel ?? 3;
+    return copies.some((g) => g.level < maxLv);
+  }
+
   getSocketedGem(defId: string): OwnedGem | undefined {
     const gemId = this.socketSetups.flatMap((setup) => setup.slots).map((slot) => slot.gemId).find((id) => this.ownedGems.find((gem) => gem.id === id)?.defId === defId);
     return gemId ? this.ownedGems.find((gem) => gem.id === gemId) : undefined;
@@ -234,21 +256,40 @@ export class Game {
 
   acquireGem(defId: string) {
     const def = GEM_DEFS[defId];
+    if (!def) return;
+    if (this.isGemMastered(defId)) return;
+
     const existing = this.ownedGems.filter((gem) => gem.defId === defId && !gem.defId.startsWith('active-'));
-    if (existing.length > 0 && !this.isRangerActiveSkill(defId)) {
+    const atCopyCap = existing.length >= MAX_GEM_COPIES;
+
+    if (atCopyCap) {
+      const maxLv = def.maxLevel;
       const highest = existing.reduce((a, b) => a.level >= b.level ? a : b);
-      this.gemChoiceData = { defId, name: def?.name ?? defId, color: def?.color ?? '#22d3ee', currentLevel: highest.level, maxLevel: def?.maxLevel ?? 3 };
+      if (highest.level >= maxLv) return;
+      this.gemChoiceData = { defId, name: def.name, color: def.color, currentLevel: highest.level, maxLevel: maxLv };
       this.state = 'gemChoice';
       this.onStateChange('gemChoice');
       this.onGemChoice(this.gemChoiceData);
       return;
     }
+
+    if (existing.length > 0 && !this.isRangerActiveSkill(defId)) {
+      const highest = existing.reduce((a, b) => a.level >= b.level ? a : b);
+      this.gemChoiceData = { defId, name: def.name, color: def.color, currentLevel: highest.level, maxLevel: def.maxLevel };
+      this.state = 'gemChoice';
+      this.onStateChange('gemChoice');
+      this.onGemChoice(this.gemChoiceData);
+      return;
+    }
+
     this.addNewGem(defId);
     this.relinkGems();
     this.onStatsUpdate(this.getStats());
   }
 
   addNewGem(defId: string) {
+    if (this.isGemMastered(defId)) return;
+    if (this.countGemCopies(defId) >= MAX_GEM_COPIES) return;
     const gem: OwnedGem = { id: `${defId}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, defId, level: 1 };
     this.ownedGems.push(gem);
     if (this.isRangerActiveSkill(defId)) {
@@ -262,10 +303,13 @@ export class Game {
   }
 
   levelUpHighestGem(defId: string) {
-    const existing = this.ownedGems.filter((gem) => gem.defId === defId);
+    const existing = this.ownedGems.filter((gem) => gem.defId === defId && !gem.defId.startsWith('active-'));
     if (existing.length === 0) return;
-    const highest = existing.reduce((a, b) => a.level >= b.level ? a : b);
-    highest.level = Math.min(GEM_DEFS[defId]?.maxLevel ?? 3, highest.level + 1);
+    const maxLv = GEM_DEFS[defId]?.maxLevel ?? 3;
+    const upgradeable = existing.filter((g) => g.level < maxLv);
+    if (upgradeable.length === 0) return;
+    const highest = upgradeable.reduce((a, b) => a.level >= b.level ? a : b);
+    highest.level = Math.min(maxLv, highest.level + 1);
   }
 
   resolveGemChoice(action: 'levelUp' | 'new') {
@@ -1047,12 +1091,10 @@ export class Game {
     const baseChance = enemyKind === 'boss' ? 1.0 : enemyKind === 'charger' ? 0.25 : 0.15;
     if (Math.random() > baseChance) return;
     const roll = Math.random();
-    if (roll < 0.15) {
-      this.spawnGroundItem(pos, 'gem', Math.random() < 0.5 ? '多重投射支援' : '增幅支援', '#22d3ee', '#0e7490');
-    } else if (roll < 0.30) {
+    if (roll < 0.35) {
       this.spawnGroundItem(pos, 'currency', Math.random() < 0.7 ? '混沌石' : '崇高石', '#92400e', '#fbbf24');
     } else {
-      const equips = ['製圖者之帽', '皮革腰帶', '鐵戒指', '鏽劍', '秘法法袍', '皮甲', '鋼盾'];
+      const equips = ['製圖者之帽', '皮革腰帶', '鐵戒指', '鏽劍', '秘法法袍', '皮甲', '鋼盾', '皮靴', '鐵盔'];
       const name = equips[Math.floor(Math.random() * equips.length)];
       const rarityRoll = Math.random();
       const labelColor = rarityRoll < 0.5 ? '#d1d5db' : rarityRoll < 0.8 ? '#60a5fa' : rarityRoll < 0.95 ? '#fbbf24' : '#fb923c';
@@ -1060,10 +1102,10 @@ export class Game {
     }
   }
 
-  spawnGroundItem(pos: Vec2, kind: string, name: string, labelColor: string, itemColor: string) {
+  spawnGroundItem(pos: Vec2, kind: string, name: string, labelColor: string, itemColor: string, gemDefId?: string) {
     this.groundItems.push({
       pos: { x: pos.x + (Math.random() - 0.5) * 20, y: pos.y + (Math.random() - 0.5) * 20 },
-      radius: 10, kind, name, labelColor, itemColor, life: 30, dead: false,
+      radius: 10, kind, name, labelColor, itemColor, life: 30, dead: false, gemDefId,
     });
   }
 
@@ -1095,12 +1137,7 @@ export class Game {
   }
 
   pickupItem(item: GroundItem) {
-    if (item.kind === 'gem') {
-      const defId = item.name === '多重投射支援' ? 'lmp' : 'enhance';
-      this.acquireGem(defId);
-      this.spawnParticles(item.pos, '#22d3ee', 10);
-      this.spawnPickupLabel(item.pos, `${item.name} +1`, '#22d3ee');
-    } else if (item.kind === 'currency') {
+    if (item.kind === 'currency') {
       if (item.name === '混沌石') { this.player.chaosOrbs++; this.spawnPickupLabel(item.pos, '+1 混沌石', '#92400e'); }
       else { this.player.exaltedOrbs++; this.spawnPickupLabel(item.pos, '+1 崇高石', '#fbbf24'); }
       this.spawnParticles(item.pos, '#fbbf24', 8);
@@ -1161,7 +1198,15 @@ export class Game {
   }
 
   chooseUpgrade(opt: UpgradeOption) {
-    if (opt.isGemUpgrade) {
+    if (opt.gemAction) {
+      if (opt.gemAction.type === 'levelUp') {
+        this.levelUpHighestGem(opt.gemAction.defId);
+        this.relinkGems();
+        this.onStatsUpdate(this.getStats());
+      } else {
+        this.acquireGem(opt.gemAction.defId);
+      }
+    } else if (opt.isGemUpgrade) {
       const defId = opt.id.split('_')[0];
       if (defId in GEM_DEFS) this.acquireGem(defId);
       else opt.apply(this.player);
@@ -1172,155 +1217,120 @@ export class Game {
   }
 
   rollUpgrades(): UpgradeOption[] {
-    const p = this.player;
     const GEM_MAX = 3;
-    const results: UpgradeOption[] = [];
 
-    // --- Gem upgrade candidates (dynamic, based on owned gems) ---
+    // --- Gem level-up candidates: any support gem with at least one copy below maxLevel ---
     const gemUpgrades: UpgradeOption[] = [];
+    const supportGemIds = Object.keys(GEM_DEFS).filter((id) => GEM_DEFS[id].kind === 'support');
 
-    if (p.lmpLevel > 0 && p.lmpLevel < GEM_MAX) {
-      const lv = p.lmpLevel;
+    for (const defId of supportGemIds) {
+      if (this.isGemMastered(defId)) continue;
+      const copies = this.ownedGems.filter((g) => g.defId === defId && !g.defId.startsWith('active-'));
+      if (copies.length === 0) continue;
+      const maxLv = GEM_DEFS[defId].maxLevel;
+      const highest = copies.reduce((a, b) => a.level >= b.level ? a : b);
+      if (highest.level >= maxLv) continue;
+      const lv = highest.level;
       const next = lv + 1;
-      const dmgBonus = [0, 0.20, 0.35, 0.50][next] ?? 0.50;
-      const spdBonus = [0, 0.10, 0.15, 0.20][next] ?? 0.20;
-      const extraProj = next >= 3 ? 1 : 0;
+      const def = GEM_DEFS[defId];
       const details: string[] = [];
-      details.push(`投射物傷害 +${Math.round(dmgBonus * 100)}%`);
-      details.push(`投射物速度 +${Math.round(spdBonus * 100)}%`);
-      if (extraProj > 0) details.push(`投射物數量 +${extraProj}`);
-      gemUpgrades.push({
-        id: `lmp_lv${next}`, name: '多重投射支援', color: '#22d3ee',
-        isGemUpgrade: true, gemLevel: lv, gemMaxLevel: GEM_MAX, detailLines: details,
-        description: `Lv.${lv} → Lv.${next}`,
-        apply: (pl) => {
-          pl.lmpLevel = next;
-          pl.damage *= 1 + dmgBonus;
-          pl.projectileSpeed *= 1 + spdBonus;
-        },
-      });
+
+      if (defId === 'lmp') {
+        const dmgBonus = [0, 0.20, 0.35, 0.50][next] ?? 0.50;
+        const spdBonus = [0, 0.10, 0.15, 0.20][next] ?? 0.20;
+        const extraProj = next >= 3 ? 1 : 0;
+        details.push(`投射物傷害 +${Math.round(dmgBonus * 100)}%`, `投射物速度 +${Math.round(spdBonus * 100)}%`);
+        if (extraProj > 0) details.push(`投射物數量 +${extraProj}`);
+        gemUpgrades.push({
+          id: `lmp_lv${next}`, name: def.name, color: def.color,
+          isGemUpgrade: true, gemLevel: lv, gemMaxLevel: GEM_MAX, detailLines: details,
+          description: `Lv.${lv} → Lv.${next}`,
+          gemAction: { type: 'levelUp', defId: 'lmp' },
+          apply: (pl) => { const c = this.ownedGems.filter((g) => g.defId === 'lmp'); if (c.length) { const h = c.reduce((a, b) => a.level >= b.level ? a : b); h.level = Math.min(GEM_MAX, h.level + 1); this.relinkGems(); } pl.lmpLevel = Math.min(GEM_MAX, lv + 1); pl.damage *= 1 + dmgBonus; pl.projectileSpeed *= 1 + spdBonus; },
+        });
+      } else if (defId === 'enhance') {
+        const speedBonus = [0, 0.10, 0.15, 0.20][next] ?? 0.20;
+        details.push(`攻擊/施法速度 +${Math.round(speedBonus * 100)}%`, '冷卻時間進一步縮短');
+        gemUpgrades.push({
+          id: `enhance_lv${next}`, name: def.name, color: def.color,
+          isGemUpgrade: true, gemLevel: lv, gemMaxLevel: GEM_MAX, detailLines: details,
+          description: `Lv.${lv} → Lv.${next}`,
+          gemAction: { type: 'levelUp', defId: 'enhance' },
+          apply: (pl) => { const c = this.ownedGems.filter((g) => g.defId === 'enhance'); if (c.length) { const h = c.reduce((a, b) => a.level >= b.level ? a : b); h.level = Math.min(GEM_MAX, h.level + 1); this.relinkGems(); } pl.enhanceLevel = Math.min(GEM_MAX, lv + 1); pl.fireRate *= 1 + speedBonus; },
+        });
+      } else if (defId === 'chainLightning') {
+        const chains = next + 1;
+        const dmgPct = next * 15;
+        details.push(`連鎖次數提升至 ${chains}`, `連鎖傷害衰減減少 ${dmgPct}%`);
+        gemUpgrades.push({
+          id: `chain_lv${next}`, name: def.name, color: def.color,
+          isGemUpgrade: true, gemLevel: lv, gemMaxLevel: GEM_MAX, detailLines: details,
+          description: `Lv.${lv} → Lv.${next}`,
+          gemAction: { type: 'levelUp', defId: 'chainLightning' },
+          apply: (pl) => { const c = this.ownedGems.filter((g) => g.defId === 'chainLightning'); if (c.length) { const h = c.reduce((a, b) => a.level >= b.level ? a : b); h.level = Math.min(GEM_MAX, h.level + 1); this.relinkGems(); } pl.chainLightningLevel = Math.min(GEM_MAX, lv + 1); },
+        });
+      } else if (defId === 'splitShot') {
+        const extra = next * 2;
+        const dmgPct = next * 10;
+        details.push(`額外投射物 +${extra}`, `投射物傷害 +${dmgPct}%`);
+        gemUpgrades.push({
+          id: `split_lv${next}`, name: def.name, color: def.color,
+          isGemUpgrade: true, gemLevel: lv, gemMaxLevel: GEM_MAX, detailLines: details,
+          description: `Lv.${lv} → Lv.${next}`,
+          gemAction: { type: 'levelUp', defId: 'splitShot' },
+          apply: (pl) => { const c = this.ownedGems.filter((g) => g.defId === 'splitShot'); if (c.length) { const h = c.reduce((a, b) => a.level >= b.level ? a : b); h.level = Math.min(GEM_MAX, h.level + 1); this.relinkGems(); } pl.splitShotLevel = Math.min(GEM_MAX, lv + 1); pl.damage *= 1 + dmgPct / 100; },
+        });
+      } else if (defId === 'spiritFire') {
+        const dmgPct = next * 25;
+        const extraFlames = next >= 2 ? 1 : 0;
+        details.push(`火焰傷害 +${dmgPct}%`);
+        if (extraFlames > 0) details.push(`額外召喚 ${extraFlames} 朵冥界之火`);
+        gemUpgrades.push({
+          id: `spirit_lv${next}`, name: def.name, color: def.color,
+          isGemUpgrade: true, gemLevel: lv, gemMaxLevel: GEM_MAX, detailLines: details,
+          description: `Lv.${lv} → Lv.${next}`,
+          gemAction: { type: 'levelUp', defId: 'spiritFire' },
+          apply: (pl) => { const c = this.ownedGems.filter((g) => g.defId === 'spiritFire'); if (c.length) { const h = c.reduce((a, b) => a.level >= b.level ? a : b); h.level = Math.min(GEM_MAX, h.level + 1); this.relinkGems(); } pl.spiritFireLevel = Math.min(GEM_MAX, lv + 1); },
+        });
+      } else {
+        details.push(`${def.name} Lv.${lv} → Lv.${next}`, def.description);
+        gemUpgrades.push({
+          id: `${defId}_lv${next}`, name: def.name, color: def.color,
+          isGemUpgrade: true, gemLevel: lv, gemMaxLevel: GEM_MAX, detailLines: details,
+          description: `Lv.${lv} → Lv.${next}`,
+          gemAction: { type: 'levelUp', defId },
+          apply: () => { const c = this.ownedGems.filter((g) => g.defId === defId); if (c.length) { const h = c.reduce((a, b) => a.level >= b.level ? a : b); h.level = Math.min(GEM_MAX, h.level + 1); this.relinkGems(); } },
+        });
+      }
     }
 
-    if (p.enhanceLevel > 0 && p.enhanceLevel < GEM_MAX) {
-      const lv = p.enhanceLevel;
-      const next = lv + 1;
-      const speedBonus = [0, 0.10, 0.15, 0.20][next] ?? 0.20;
-      const details: string[] = [];
-      details.push(`攻擊/施法速度 +${Math.round(speedBonus * 100)}%`);
-      details.push(`冷卻時間進一步縮短`);
-      gemUpgrades.push({
-        id: `enhance_lv${next}`, name: '增幅支援', color: '#a78bfa',
-        isGemUpgrade: true, gemLevel: lv, gemMaxLevel: GEM_MAX, detailLines: details,
-        description: `Lv.${lv} → Lv.${next}`,
-        apply: (pl) => {
-          pl.enhanceLevel = next;
-          pl.fireRate *= 1 + speedBonus;
-        },
-      });
-    }
-
-    if (p.chainLightningLevel > 0 && p.chainLightningLevel < GEM_MAX) {
-      const lv = p.chainLightningLevel;
-      const next = lv + 1;
-      const chains = next + 1;
-      const dmgPct = next * 15;
-      const details: string[] = [];
-      details.push(`連鎖次數提升至 ${chains}`);
-      details.push(`連鎖傷害衰減減少 ${dmgPct}%`);
-      gemUpgrades.push({
-        id: `chain_lv${next}`, name: '連鎖閃電', color: '#67e8f9',
-        isGemUpgrade: true, gemLevel: lv, gemMaxLevel: GEM_MAX, detailLines: details,
-        description: `Lv.${lv} → Lv.${next}`,
-        apply: (pl) => { pl.chainLightningLevel = next; },
-      });
-    }
-
-    if (p.splitShotLevel > 0 && p.splitShotLevel < GEM_MAX) {
-      const lv = p.splitShotLevel;
-      const next = lv + 1;
-      const extra = next * 2;
-      const dmgPct = next * 10;
-      const details: string[] = [];
-      details.push(`額外投射物 +${extra}`);
-      details.push(`投射物傷害 +${dmgPct}%`);
-      gemUpgrades.push({
-        id: `split_lv${next}`, name: '分裂箭', color: '#84cc16',
-        isGemUpgrade: true, gemLevel: lv, gemMaxLevel: GEM_MAX, detailLines: details,
-        description: `Lv.${lv} → Lv.${next}`,
-        apply: (pl) => {
-          pl.splitShotLevel = next;
-          pl.damage *= 1 + dmgPct / 100;
-        },
-      });
-    }
-
-    if (p.spiritFireLevel > 0 && p.spiritFireLevel < GEM_MAX) {
-      const lv = p.spiritFireLevel;
-      const next = lv + 1;
-      const dmgPct = next * 25;
-      const extraFlames = next >= 2 ? 1 : 0;
-      const details: string[] = [];
-      details.push(`火焰傷害 +${dmgPct}%`);
-      if (extraFlames > 0) details.push(`額外召喚 ${extraFlames} 朵冥界之火`);
-      gemUpgrades.push({
-        id: `spirit_lv${next}`, name: '冥界之火', color: '#a855f7',
-        isGemUpgrade: true, gemLevel: lv, gemMaxLevel: GEM_MAX, detailLines: details,
-        description: `Lv.${lv} → Lv.${next}`,
-        apply: (pl) => { pl.spiritFireLevel = next; },
-      });
-    }
-
-    // --- New gem discovery (only if not already owned) ---
+    // --- New gem discovery: only if copies < MAX_GEM_COPIES and not mastered ---
     const newGemUpgrades: UpgradeOption[] = [];
-    if (p.lmpLevel === 0) {
+    for (const defId of supportGemIds) {
+      if (this.isGemMastered(defId)) continue;
+      if (this.countGemCopies(defId) >= MAX_GEM_COPIES) continue;
+      const def = GEM_DEFS[defId];
+      const isFirst = this.countGemCopies(defId) === 0;
+      const detailLines: string[] = [];
+      let desc: string;
+      if (isFirst) {
+        detailLines.push(def.description, '初次拾取');
+        desc = '新輔助寶石';
+      } else {
+        const copies = this.ownedGems.filter((g) => g.defId === defId && !g.defId.startsWith('active-'));
+        detailLines.push(`獲得第 ${copies.length + 1} 顆 ${def.name}`, '可自由連線配置');
+        desc = `取得新寶石 (第${copies.length + 1}顆)`;
+      }
       newGemUpgrades.push({
-        id: 'lmp_new', name: '多重投射支援', color: '#22d3ee',
-        isGemUpgrade: true, gemLevel: 0, gemMaxLevel: GEM_MAX,
-        detailLines: ['投射物數量 +2', '初次拾取'],
-        description: '新輔助寶石',
-        apply: (pl) => { pl.lmpLevel = 1; },
-      });
-    }
-    if (p.enhanceLevel === 0) {
-      newGemUpgrades.push({
-        id: 'enhance_new', name: '增幅支援', color: '#a78bfa',
-        isGemUpgrade: true, gemLevel: 0, gemMaxLevel: GEM_MAX,
-        detailLines: ['攻擊速度 +40%', '初次拾取'],
-        description: '新輔助寶石',
-        apply: (pl) => {
-          pl.enhanceLevel = 1;
-          pl.fireRate *= 1.4;
-        },
-      });
-    }
-    if (p.chainLightningLevel === 0) {
-      newGemUpgrades.push({
-        id: 'chain_new', name: '連鎖閃電', color: '#67e8f9',
-        isGemUpgrade: true, gemLevel: 0, gemMaxLevel: GEM_MAX,
-        detailLines: ['命中後彈射至 2 個敵人', '初次拾取'],
-        description: '新輔助寶石',
-        apply: (pl) => { pl.chainLightningLevel = 1; },
-      });
-    }
-    if (p.splitShotLevel === 0) {
-      newGemUpgrades.push({
-        id: 'split_new', name: '分裂箭', color: '#84cc16',
-        isGemUpgrade: true, gemLevel: 0, gemMaxLevel: GEM_MAX,
-        detailLines: ['額外投射物 +2', '初次拾取'],
-        description: '新輔助寶石',
-        apply: (pl) => { pl.splitShotLevel = 1; },
-      });
-    }
-    if (p.spiritFireLevel === 0) {
-      newGemUpgrades.push({
-        id: 'spirit_new', name: '冥界之火', color: '#a855f7',
-        isGemUpgrade: true, gemLevel: 0, gemMaxLevel: GEM_MAX,
-        detailLines: ['每 5 秒召喚環繞火焰', '初次拾取'],
-        description: '新輔助寶石',
-        apply: (pl) => { pl.spiritFireLevel = 1; },
+        id: `${defId}_new`, name: def.name, color: def.color,
+        isGemUpgrade: true, gemLevel: 0, gemMaxLevel: def.maxLevel, detailLines,
+        description: desc,
+        gemAction: { type: 'acquire', defId },
+        apply: () => { this.acquireGem(defId); },
       });
     }
 
+    // --- Ranger active skills (max 1 copy, not subject to MAX_GEM_COPIES) ---
     if (this.classDef.id === 'ranger' && this.socketSetups.length < 3) {
       const rangerSkills: Array<{ id: string; name: string; color: string; details: string[] }> = [
         { id: 'burningArrow', name: '燃燒箭矢', color: '#f97316', details: ['火焰箭矢', '25% 機率點燃 4 秒'] },
@@ -1333,12 +1343,13 @@ export class Game {
           id: `${skill.id}_new`, name: skill.name, color: skill.color,
           isGemUpgrade: true, gemLevel: 0, gemMaxLevel: 1,
           detailLines: [...skill.details, '解鎖新的主動技能鏈'], description: '新主動技能',
+          gemAction: { type: 'acquire', defId: skill.id },
           apply: () => {},
         });
       }
     }
 
-    // --- Global baseline stat pool (option C candidates) ---
+    // --- Global baseline stat pool ---
     const globalPool: UpgradeOption[] = [
       { id: 'firerate', name: '攻速提升', description: '攻擊速度 +25%', color: '#f59e0b', apply: (pl) => { pl.fireRate *= 1.25; } },
       { id: 'speed', name: '移速提升', description: '移動速度 +5%', color: '#38bdf8', apply: (pl) => { pl.speed = Math.min(pl.speed * 1.05, MOVE_SPEED_CAP); } },
@@ -1350,20 +1361,13 @@ export class Game {
     ];
 
     // --- Build the 3 choices ---
-    // Slot A & B: prioritize existing gem upgrades (60%), then new gems (25%), then global stats (15%)
     const priorityPool: UpgradeOption[] = [];
-    if (gemUpgrades.length > 0) {
-      // Weight existing gem upgrades heavily — add each twice
-      for (const gu of gemUpgrades) { priorityPool.push(gu); priorityPool.push(gu); }
-    }
+    for (const gu of gemUpgrades) { priorityPool.push(gu); priorityPool.push(gu); }
     for (const ng of newGemUpgrades) { priorityPool.push(ng); }
-    // Add some global stat options to A/B pool too
     for (const gp of globalPool) { priorityPool.push(gp); }
 
     const chosen: UpgradeOption[] = [];
     const used = new Set<string>();
-
-    // Try to fill A and B from priority pool
     const shuffled = [...priorityPool].sort(() => Math.random() - 0.5);
     for (const opt of shuffled) {
       if (chosen.length >= 2) break;
@@ -1371,21 +1375,13 @@ export class Game {
       used.add(opt.id);
       chosen.push(opt);
     }
-
-    // If we couldn't fill A/B from priority, fill from global
     while (chosen.length < 2) {
       const gp = globalPool[Math.floor(Math.random() * globalPool.length)];
       if (!used.has(gp.id)) { used.add(gp.id); chosen.push(gp); }
     }
-
-    // Slot C: guaranteed global baseline stat
     const cPool = globalPool.filter((g) => !used.has(g.id));
-    if (cPool.length > 0) {
-      chosen.push(cPool[Math.floor(Math.random() * cPool.length)]);
-    } else {
-      // Fallback: any global stat
-      chosen.push(globalPool[Math.floor(Math.random() * globalPool.length)]);
-    }
+    if (cPool.length > 0) chosen.push(cPool[Math.floor(Math.random() * cPool.length)]);
+    else chosen.push(globalPool[Math.floor(Math.random() * globalPool.length)]);
 
     return chosen.slice(0, 3);
   }
