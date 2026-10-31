@@ -63,7 +63,7 @@ export class Game {
   skillFireTimers: number[] = [];
 
   onStateChange: (state: GameState) => void = () => {};
-  onHudUpdate: (data: { level: number; xp: number; xpToLevel: number; kills: number; time: number; hp: number; maxHp: number; mana: number; maxMana: number; wave: number; chaosOrbs: number; exaltedOrbs: number }) => void = () => {};
+  onHudUpdate: (data: { level: number; xp: number; xpToLevel: number; kills: number; time: number; hp: number; maxHp: number; mana: number; maxMana: number; wave: number; chaosOrbs: number; exaltedOrbs: number; energyShield: number; maxEnergyShield: number; esRecharging: boolean }) => void = () => {};
   onUpgradeChoices: (choices: UpgradeOption[]) => void = () => {};
   onGemChoice: (data: GemChoiceData) => void = () => {};
   onDeath: () => void = () => {};
@@ -93,6 +93,9 @@ export class Game {
       mana: classDef.mana, maxMana: classDef.mana,
       chainLightningLevel: 0, splitShotLevel: 0, spiritFireLevel: 0,
       lmpLevel: 0, enhanceLevel: 0, chaosOrbs: 0, exaltedOrbs: 0,
+      armor: classDef.armor, evasion: classDef.evasion,
+      energyShield: classDef.energyShield, maxEnergyShield: classDef.energyShield,
+      esRechargeDelay: 0, esIsRecharging: false,
     };
   }
 
@@ -439,6 +442,18 @@ export class Game {
     }
 
     this.player.mana = Math.min(this.player.maxMana, this.player.mana + 2 * dt);
+
+    // Energy Shield recharge: after 4s without taking damage, recharge 20%/s
+    if (this.player.esRechargeDelay > 0) {
+      this.player.esRechargeDelay -= dt;
+      if (this.player.esRechargeDelay <= 0) {
+        this.player.esRechargeDelay = 0;
+        this.player.esIsRecharging = true;
+      }
+    }
+    if (this.player.esIsRecharging && this.player.energyShield < this.player.maxEnergyShield) {
+      this.player.energyShield = Math.min(this.player.maxEnergyShield, this.player.energyShield + this.player.maxEnergyShield * 0.20 * dt);
+    }
 
     if (this.shakeTime > 0) {
       this.shakeTime -= dt;
@@ -801,12 +816,53 @@ export class Game {
     for (const e of this.enemies) {
       if (e.dead) continue;
       if (Math.hypot(e.pos.x - p.pos.x, e.pos.y - p.pos.y) < e.radius + p.radius) {
-        p.hp -= (e.kind === 'boss' ? 35 : 20) * 0.016;
-        if (p.hp <= 0) {
-          p.hp = 0;
-          if (!p.dead) { p.dead = true; this.triggerShake(10, 0.5); this.onDeath(); }
-        }
+        this.damagePlayer(e.kind === 'boss' ? 35 : 20);
       }
+    }
+  }
+
+  /** PoE-style player damage resolution: Evasion → Armor → Energy Shield → HP */
+  damagePlayer(rawDamage: number) {
+    const p = this.player;
+    if (p.dead) return;
+
+    // 1. Evasion: chance to completely avoid the hit
+    const evasionChance = Math.min(0.75, p.evasion / (p.evasion + 150));
+    if (Math.random() < evasionChance) {
+      this.spawnDamageNumber(p.pos, 0, '#bae6fd');
+      this.spawnPickupLabel(p.pos, '閃避', '#bae6fd');
+      this.spawnParticles(p.pos, '#bae6fd', 4);
+      return;
+    }
+
+    // 2. Armor: percentage physical mitigation, capped at 75%
+    const armorReduction = Math.min(0.75, p.armor / (p.armor + 200));
+    let damage = rawDamage * (1 - armorReduction);
+
+    // 3. Energy Shield absorbs first, then HP
+    if (p.energyShield > 0) {
+      const esAbsorbed = Math.min(p.energyShield, damage);
+      p.energyShield -= esAbsorbed;
+      damage -= esAbsorbed;
+      if (esAbsorbed > 0) {
+        this.spawnParticles(p.pos, '#3b82f6', 6);
+      }
+    }
+
+    // Any damage taken breaks ES recharge and resets the 4s delay
+    p.esRechargeDelay = 4;
+    p.esIsRecharging = false;
+
+    // 4. Remaining damage goes to HP
+    if (damage > 0) {
+      p.hp -= damage;
+      this.spawnDamageNumber(p.pos, Math.round(damage), '#ef4444');
+      this.triggerShake(3, 0.15);
+    }
+
+    if (p.hp <= 0) {
+      p.hp = 0;
+      if (!p.dead) { p.dead = true; this.triggerShake(10, 0.5); this.onDeath(); }
     }
   }
 
@@ -974,7 +1030,7 @@ export class Game {
         radius: 10, hp: 1, maxHp: 1, dead: false,
         damage: p.damage, lifetime: p.targetRange / p.projectileSpeed,
         color: '#ff6b35', chainRemaining: p.chainLightningLevel > 0 ? 1 + p.chainLightningLevel : 0,
-        hitEnemies: new Set<Enemy>(), kind: 'fireball', explosionRadius: 40,
+        hitEnemies: new Set<Enemy>(), kind: 'fireball', explosionRadius: 40, chainIndex: 0,
       });
     }
   }
@@ -996,7 +1052,7 @@ export class Game {
         radius: 5, hp: 1, maxHp: 1, dead: false, damage: this.getChainDamage(chainIndex),
         lifetime: p.targetRange / this.getChainProjectileSpeed(chainIndex), color,
         chainRemaining: this.getChainSupportLevel(chainIndex, 'chainLightning') > 0 ? 1 + this.getChainSupportLevel(chainIndex, 'chainLightning') : 0,
-        hitEnemies: new Set<Enemy>(), kind, explosionRadius: 0,
+        hitEnemies: new Set<Enemy>(), kind, explosionRadius: 0, chainIndex: chainIndex,
       });
     }
   }
@@ -1027,7 +1083,7 @@ export class Game {
         radius: 4, hp: 1, maxHp: 1, dead: false,
         damage: this.getChainDamage(chainIndex), lifetime: 1.5,
         color: '#22d3ee', chainRemaining: chainLevel > 0 ? 1 + chainLevel : 0,
-        hitEnemies: new Set<Enemy>(), kind: 'arrow', explosionRadius: 0,
+        hitEnemies: new Set<Enemy>(), kind: 'arrow', explosionRadius: 0, chainIndex: chainIndex,
       });
     }
     const halfCone = Math.PI / 6 + lmpLevel * (Math.PI / 12);
@@ -1058,7 +1114,7 @@ export class Game {
         pos: { x: p.pos.x, y: p.pos.y }, angle: baseAngle,
         spread: Math.PI / 8, maxRange: 150, currentRange: 0,
         life: 0.4 + i * 0.15, maxLife: 0.4 + i * 0.15, damage: p.damage,
-        color: '#991b1b', hitEnemies: new Set<Enemy>(),
+        color: '#991b1b', hitEnemies: new Set<Enemy>(), chainIndex: 0,
       });
     }
     this.triggerShake(6, 0.3);
@@ -1067,7 +1123,7 @@ export class Game {
   createExplosion(pos: Vec2, radius: number, damage: number) {
     this.explosions.push({
       pos: { x: pos.x, y: pos.y }, radius, life: 0.3, maxLife: 0.3,
-      damage, hitEnemies: new Set<Enemy>(), color: '#ff6b35',
+      damage, hitEnemies: new Set<Enemy>(), color: '#ff6b35', chainIndex: 0,
     });
     this.spawnParticles(pos, '#ff6b35', 15);
     this.triggerShake(4, 0.2);
@@ -1143,10 +1199,12 @@ export class Game {
       this.spawnParticles(item.pos, '#fbbf24', 8);
     } else if (item.kind === 'equipment') {
       const bonus = Math.random();
-      if (bonus < 0.4) { this.player.maxHp += 20; this.player.hp += 20; this.spawnPickupLabel(item.pos, `${item.name} (HP+20)`, item.labelColor); }
-      else if (bonus < 0.7) { this.player.speed = Math.min(this.player.speed * 1.02, MOVE_SPEED_CAP); this.spawnPickupLabel(item.pos, `${item.name} (速度+2%)`, item.labelColor); }
-      else if (bonus < 0.9) { this.player.damage *= 1.1; this.spawnPickupLabel(item.pos, `${item.name} (傷害+10%)`, item.labelColor); }
-      else { this.player.maxMana += 15; this.player.mana += 15; this.spawnPickupLabel(item.pos, `${item.name} (法力+15)`, item.labelColor); }
+      if (bonus < 0.3) { this.player.maxHp += 20; this.player.hp += 20; this.spawnPickupLabel(item.pos, `${item.name} (HP+20)`, item.labelColor); }
+      else if (bonus < 0.5) { this.player.speed = Math.min(this.player.speed * 1.02, MOVE_SPEED_CAP); this.spawnPickupLabel(item.pos, `${item.name} (速度+2%)`, item.labelColor); }
+      else if (bonus < 0.7) { this.player.damage *= 1.1; this.spawnPickupLabel(item.pos, `${item.name} (傷害+10%)`, item.labelColor); }
+      else if (bonus < 0.8) { this.player.armor += 30; this.spawnPickupLabel(item.pos, `${item.name} (護甲+30)`, item.labelColor); }
+      else if (bonus < 0.9) { this.player.evasion += 30; this.spawnPickupLabel(item.pos, `${item.name} (閃避+30)`, item.labelColor); }
+      else { this.player.maxEnergyShield += 20; this.player.energyShield = this.player.maxEnergyShield; this.spawnPickupLabel(item.pos, `${item.name} (護盾+20)`, item.labelColor); }
       this.spawnParticles(item.pos, item.labelColor, 8);
     }
   }
@@ -1358,6 +1416,13 @@ export class Game {
       { id: 'maxhp', name: '最大生命', description: '最大生命 +30 並恢復', color: '#34d399', apply: (pl) => { pl.maxHp += 30; pl.hp = pl.maxHp; } },
       { id: 'maxhp_pct', name: '生命強化', description: '最大生命 +20% 並恢復', color: '#34d399', apply: (pl) => { pl.maxHp = Math.round(pl.maxHp * 1.2); pl.hp = pl.maxHp; } },
       { id: 'speed_pct', name: '迅捷', description: '移動速度 +3%', color: '#38bdf8', apply: (pl) => { pl.speed = Math.min(pl.speed * 1.03, MOVE_SPEED_CAP); } },
+      // --- Defensive upgrades (PoE-style) ---
+      { id: 'armor', name: '護甲強化', description: '護甲 +80', color: '#fbbf24', apply: (pl) => { pl.armor += 80; } },
+      { id: 'armor_pct', name: '鋼鐵意志', description: '護甲 +25%', color: '#fbbf24', apply: (pl) => { pl.armor = Math.round(pl.armor * 1.25); } },
+      { id: 'evasion', name: '閃避精進', description: '閃避 +80', color: '#22d3ee', apply: (pl) => { pl.evasion += 80; } },
+      { id: 'evasion_pct', name: '幽影之舞', description: '閃避 +25%', color: '#22d3ee', apply: (pl) => { pl.evasion = Math.round(pl.evasion * 1.25); } },
+      { id: 'maxes', name: '能量護盾', description: '最大能量護盾 +40 並充能', color: '#3b82f6', apply: (pl) => { pl.maxEnergyShield += 40; pl.energyShield = pl.maxEnergyShield; pl.esRechargeDelay = 0; pl.esIsRecharging = true; } },
+      { id: 'maxes_pct', name: '秘能護體', description: '最大能量護盾 +25% 並充能', color: '#3b82f6', apply: (pl) => { pl.maxEnergyShield = Math.round(pl.maxEnergyShield * 1.25); pl.energyShield = pl.maxEnergyShield; pl.esRechargeDelay = 0; pl.esIsRecharging = true; } },
     ];
 
     // --- Build the 3 choices ---
@@ -1418,6 +1483,9 @@ export class Game {
       chaosOrbs: p.chaosOrbs, exaltedOrbs: p.exaltedOrbs,
       lmpLevel: p.lmpLevel, enhanceLevel: p.enhanceLevel,
       chainLevel: p.chainLightningLevel, splitLevel: p.splitShotLevel, spiritLevel: p.spiritFireLevel,
+      armor: Math.round(p.armor), evasion: Math.round(p.evasion),
+      evasionChance: Math.round(Math.min(0.75, p.evasion / (p.evasion + 150)) * 100),
+      energyShield: Math.ceil(p.energyShield), maxEnergyShield: p.maxEnergyShield,
       skillChains, ownedGems, skills: skillChains.flatMap((chain) => chain.filter((slot) => slot.gem).map((slot) => ({ name: slot.gem!.name, level: slot.gem!.level }))),
     };
   }
@@ -1446,6 +1514,8 @@ export class Game {
       hp: Math.ceil(this.player.hp), maxHp: this.player.maxHp,
       mana: Math.ceil(this.player.mana), maxMana: this.player.maxMana,
       wave: this.currentWave, chaosOrbs: this.player.chaosOrbs, exaltedOrbs: this.player.exaltedOrbs,
+      energyShield: Math.ceil(this.player.energyShield), maxEnergyShield: this.player.maxEnergyShield,
+      esRecharging: this.player.esIsRecharging,
     });
   }
 

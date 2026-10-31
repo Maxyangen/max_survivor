@@ -29,6 +29,13 @@ export interface Player extends Entity {
   spiritFireLevel: number;
   lmpLevel: number;
   enhanceLevel: number;
+  // Defensive stats (PoE-style)
+  armor: number;
+  evasion: number;
+  energyShield: number;
+  maxEnergyShield: number;
+  esRechargeDelay: number;
+  esIsRecharging: boolean;
 }
 
 export type GemKind = 'support' | 'skill';
@@ -105,26 +112,32 @@ export interface ClassDef {
   projectileSpeed: number;
   mana: number;
   skillName: string;
+  armor: number;
+  evasion: number;
+  energyShield: number;
 }
 
 export const CLASSES: ClassDef[] = [
   {
     id: 'marauder', name: '野蠻人', subtitle: 'Marauder',
-    description: '血量充沛的肉搏戰士，移動較慢但能承受大量傷害。',
+    description: '血量充沛的肉搏戰士，高護甲低閃避，能量護盾極少。',
     color: '#991b1b', hp: 160, speed: 170, fireRate: 0.83, damage: 18,
     targetRange: 200, projectileSpeed: 0, mana: 50, skillName: '裂地之擊',
+    armor: 300, evasion: 30, energyShield: 20,
   },
   {
     id: 'ranger', name: '遊俠', subtitle: 'Ranger',
-    description: '敏捷的弓箭手，移動迅速且攻擊間隔極短。',
+    description: '敏捷的弓箭手，高閃避中護甲，擁有少量能量護盾。',
     color: '#166534', hp: 80, speed: 250, fireRate: 1.67, damage: 8,
     targetRange: 600, projectileSpeed: 600, mana: 80, skillName: '電流箭矢',
+    armor: 100, evasion: 300, energyShield: 40,
   },
   {
     id: 'witch', name: '女巫', subtitle: 'Witch',
-    description: '遠程法術使用者，投射物速度極快且索敵範圍廣闊。',
+    description: '遠程法術使用者，高能量護盾但護甲與閃避均低。',
     color: '#6b21a8', hp: 70, speed: 200, fireRate: 1.0, damage: 12,
     targetRange: 900, projectileSpeed: 800, mana: 120, skillName: '火球',
+    armor: 60, evasion: 120, energyShield: 120,
   },
 ];
 
@@ -249,6 +262,12 @@ export interface StatsData {
   chainLevel: number;
   splitLevel: number;
   spiritLevel: number;
+  // Defensive stats
+  armor: number;
+  evasion: number;
+  evasionChance: number;
+  energyShield: number;
+  maxEnergyShield: number;
   skillChains: SocketSlotInfo[][];
   ownedGems: OwnedGemInfo[];
   skills: SkillInfo[];

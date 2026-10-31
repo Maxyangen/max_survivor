@@ -7,6 +7,7 @@ interface HudData {
   level: number; xp: number; xpToLevel: number; kills: number; time: number;
   hp: number; maxHp: number; mana: number; maxMana: number; wave: number;
   chaosOrbs: number; exaltedOrbs: number;
+  energyShield: number; maxEnergyShield: number; esRecharging: boolean;
 }
 
 type Screen = 'menu' | 'classSelect' | 'game';
@@ -20,6 +21,7 @@ export default function GameCanvas() {
     level: 1, xp: 0, xpToLevel: 5, kills: 0, time: 0,
     hp: 100, maxHp: 100, mana: 50, maxMana: 50, wave: 1,
     chaosOrbs: 0, exaltedOrbs: 0,
+    energyShield: 0, maxEnergyShield: 0, esRecharging: false,
   });
   const [choices, setChoices] = useState<UpgradeOption[]>([]);
   const [showMenu, setShowMenu] = useState(false);
@@ -57,6 +59,7 @@ export default function GameCanvas() {
       hp: classDef.hp, maxHp: classDef.hp,
       mana: classDef.mana, maxMana: classDef.mana, wave: 1,
       chaosOrbs: 0, exaltedOrbs: 0,
+      energyShield: classDef.energyShield, maxEnergyShield: classDef.energyShield, esRecharging: false,
     });
     const game = new Game(canvas, classDef);
     gameRef.current = game;
@@ -103,6 +106,7 @@ export default function GameCanvas() {
   const hpPct = Math.max(0, (hud.hp / hud.maxHp) * 100);
   const manaPct = Math.max(0, (hud.mana / hud.maxMana) * 100);
   const xpPct = (hud.xp / hud.xpToLevel) * 100;
+  const esPct = hud.maxEnergyShield > 0 ? Math.max(0, (hud.energyShield / hud.maxEnergyShield) * 100) : 0;
 
   return (
     <div className="relative w-screen h-screen overflow-hidden bg-[#0a0a0a] select-none">
@@ -179,9 +183,9 @@ export default function GameCanvas() {
                     <p className="text-stone-400 text-xs text-center leading-relaxed min-h-[3rem]">{c.description}</p>
                     <div className="flex flex-col gap-1 text-xs mt-1">
                       <Stat label="生命" value={c.hp} max={180} color="#991b1b" />
-                      <Stat label="移速" value={c.speed} max={400} color="#166534" />
-                      <Stat label="攻速" value={c.fireRate} max={2} color="#a16207" />
-                      <Stat label="射程" value={c.targetRange} max={900} color="#6b21a8" />
+                      <Stat label="護甲" value={c.armor} max={400} color="#fbbf24" />
+                      <Stat label="閃避" value={c.evasion} max={400} color="#22d3ee" />
+                      <Stat label="護盾" value={c.energyShield} max={150} color="#3b82f6" />
                     </div>
                   </div>
                 </button>
@@ -223,21 +227,36 @@ export default function GameCanvas() {
             </div>
           </div>
 
-          {/* HP Globe */}
+          {/* HP Globe with Energy Shield overlay */}
           <div className="absolute bottom-6 left-6 z-10 pointer-events-none">
             <div className="relative w-28 h-28">
               <div className="absolute inset-0 rounded-full border-2 border-amber-900/50 shadow-2xl overflow-hidden bg-[#1a0a0a]"
                 style={{ boxShadow: '0 0 20px rgba(127,29,29,0.3), inset 0 0 20px rgba(0,0,0,0.6)' }}>
+                {/* HP fill */}
                 <div className="absolute bottom-0 left-0 right-0 transition-all duration-300"
                   style={{ height: `${hpPct}%`, background: 'linear-gradient(to top, #7f1d1d, #dc2626, #ef4444)', boxShadow: '0 -2px 8px rgba(239,68,68,0.4)' }}>
                   <div className="absolute top-0 left-0 right-0 h-1 bg-red-300/40" style={{ borderRadius: '50%' }} />
                 </div>
+                {/* Energy Shield overlay (semi-transparent blue on top of HP) */}
+                {hud.maxEnergyShield > 0 && (
+                  <div className="absolute bottom-0 left-0 right-0 transition-all duration-300"
+                    style={{ height: `${esPct}%`, background: 'linear-gradient(to top, rgba(30,58,138,0.55), rgba(37,99,235,0.45), rgba(59,130,246,0.35))', boxShadow: hud.esRecharging ? '0 -2px 12px rgba(59,130,246,0.6)' : '0 -2px 6px rgba(59,130,246,0.3)', borderTop: '1px solid rgba(147,197,253,0.5)' }}>
+                    <div className="absolute top-0 left-0 right-0 h-1 bg-blue-300/40" style={{ borderRadius: '50%' }} />
+                  </div>
+                )}
                 <div className="absolute inset-0 rounded-full" style={{ boxShadow: 'inset 6px 6px 16px rgba(255,255,255,0.1)' }} />
               </div>
               <div className="absolute inset-0 flex flex-col items-center justify-center">
                 <span className="text-red-200 font-bold text-lg drop-shadow-lg" style={{ fontFamily: 'Georgia, serif' }}>{hud.hp}</span>
                 <span className="text-red-400/50 text-xs font-mono">{hud.maxHp}</span>
+                {hud.maxEnergyShield > 0 && (
+                  <span className="text-blue-300/70 text-[10px] font-mono mt-0.5 drop-shadow">ES {hud.energyShield}/{hud.maxEnergyShield}</span>
+                )}
               </div>
+              {/* Recharging indicator ring */}
+              {hud.esRecharging && hud.maxEnergyShield > 0 && (
+                <div className="absolute -inset-1 rounded-full border-2 border-blue-400/30 animate-pulse" style={{ boxShadow: '0 0 12px rgba(59,130,246,0.3)' }} />
+              )}
             </div>
           </div>
 
@@ -456,7 +475,7 @@ export default function GameCanvas() {
               </div>
             </div>
 
-            <div className="mb-5"><p className="text-amber-700/80 text-xs uppercase tracking-wider mb-2">核心屬性</p><div className="grid grid-cols-2 gap-2"><StatRow label="最大生命" value={stats.maxHp} /><StatRow label="移動速度" value={stats.speedAtCap ? `${stats.speed} (已達上限)` : stats.speed} /><StatRow label="攻擊速度" value={stats.fireRate + '/s'} /><StatRow label="傷害" value={stats.damage} /></div></div>
+            <div className="mb-5"><p className="text-amber-700/80 text-xs uppercase tracking-wider mb-2">核心屬性</p><div className="grid grid-cols-2 gap-2"><StatRow label="最大生命" value={stats.maxHp} /><StatRow label="移動速度" value={stats.speedAtCap ? `${stats.speed} (已達上限)` : stats.speed} /><StatRow label="攻擊速度" value={stats.fireRate + '/s'} /><StatRow label="傷害" value={stats.damage} /><StatRow label="護甲" value={stats.armor} /><StatRow label="閃避" value={`${stats.evasion} (${stats.evasionChance}%)`} /><StatRow label="能量護盾" value={`${stats.energyShield} / ${stats.maxEnergyShield}`} /></div></div>
 
             <div className="flex gap-3"><button onClick={resumeGame} className="flex-1 px-6 py-3 bg-amber-700 hover:bg-amber-600 text-amber-50 font-bold rounded-lg transition-all hover:scale-105 shadow-lg border border-amber-500/30" style={{ fontFamily: 'Georgia, serif' }}>返回遊戲</button><button onClick={backToMenu} className="flex-1 px-6 py-3 bg-transparent hover:bg-[#1a0a0a] text-red-400 hover:text-red-300 font-bold rounded-lg transition-all border border-red-900/50 hover:border-red-700/50" style={{ fontFamily: 'Georgia, serif' }}>回到主選單</button></div>
           </div>
